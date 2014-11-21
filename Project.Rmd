@@ -1,0 +1,115 @@
+---
+title: "Practical Machine Learning Course Project"
+output:
+  html_document:
+    keep_md: yes
+---
+###Introduction
+This project for the Practical Machine Learning course of the JHU Data Science specialization calls for the development of a model to classify the quality of individuals perform a certain exercise based on the data collected from activity monitors worn on the individuals' bodies.  The source of this data is the Human Activity Recognition Project at this website: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+ 
+###Getting and Cleaning the Data
+The first step is to get and load the data.
+```{r cache=TRUE, results='hide', message=FALSE}
+library(caret, quietly = TRUE)
+library(randomForest, quietly = TRUE)
+library(knitr, quietly = TRUE)
+ 
+#Get the training and testing data files
+homedir <- getwd()
+trainURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+testURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+trainfile <- paste0(homedir, '/pml-training.csv')
+testfile <- paste0(homedir, '/pml-testing.csv')
+#download.file(trainURL, destfile = trainfile, method = 'curl')
+#download.file(testURL, destfile = testfile, method = 'curl')
+ 
+#Load the training and testing data
+train <- read.csv(file = trainfile)
+test <- read.csv(file = testfile)
+```
+ 
+Next, we clean the data.  The first step in cleaning the data is to remove the variables that have very little variability using caret's nearZeroVar() function.
+```{r cache = TRUE}
+cleantrain <- train[,-nearZeroVar(train)]
+```
+ 
+In subsequent exploration of the data, two characteristics stand out.  First, there are many columns (variables) that are mostly empty or have lots of NAs.  Many of these columns contain aggregate variables anyway.  Second, the first six columns contain information specific to how the study authors collected the data, specifically the individual subject's name and several columns with when the data was collected.  Keeping these columns would have an unwanted influence on the ability of the model to make predictions on data collected outside of this study.   
+```{r cache = TRUE}
+#Remove variables that have a significant (at least 5000) number of NAs
+cleantrain <- cleantrain[, which(as.numeric(colSums(is.na(cleantrain))) < 5000)]
+ 
+#Then remove the X variable as it is just an index column and remove the username and timestamps
+cleantrain <- cleantrain[,-c(1:6)]
+```
+ 
+Our training data set has been reduced from `r dim(train)[2]` variables to `r dim(cleantrain)[2]` variables.
+ 
+###Building the Prediction Model
+Given that this is a classification problem, we select Random Forest as the first algorithm to build the prediction model from. 
+ 
+We also plan to use cross-validation to build and test the model.  Using the cleaned training data set of `r dim(cleantrain)[1]` observations, we start with using 10% of those observations as the initial training set and the remaining 90% as the test set, wanting to minimize the time and memory needed to create the initial random forest model.  Iteratively, we increased the training set percentage from 10% up to the final amount of 60%, following the guideline for using 60% of the cleaned data as the training set and 40% as the testing set.
+ 
+At each stage of the process, testing the model showed that model accuracy was more than 99%.  Because of this high degree of accuracy, we decided not to create another model based on a different class of algorithms, e.g. Decision Trees.
+ 
+Below are the steps for building the final model based on 60% of the cleaned data observations being randomly assigned to the training set and the remaining 40% going to the testing set.
+```{r cache = TRUE}
+#Set the seed for creating a data partition in the now cleaned training data
+set.seed(12345)
+ 
+#Partition the cleantrain data into a training set (mytrain) and a testing set (mytest)
+inTrain <- createDataPartition(y = cleantrain$classe, p = 0.6, list = FALSE)
+mytrain <- cleantrain[inTrain,]
+mytest <- cleantrain[-inTrain,]
+```
+ 
+Now, we build the random forest and plot which variables are most important.  The variable 'classe' is the outcome variable, while the remaining variables are all predictors.  Because performance was adequate in building the model, none of the predictors were removed from the model.
+```{r cache=TRUE}
+#Fit a model using randomForest
+modFit <- randomForest(classe ~ ., data = mytrain)
+varImpPlot(modFit)
+```
+ 
+Prior to removing the index, username, and timestamps from the cleaned data set, those variables represented the most important variables.  Now, as the plot above shows, the most important variables are measurements from the activity monitors.
+ 
+Using the model to predict the outcome of the training set resulted in a 100% accuracy, which is expected and shown in the confusionMatrix output.
+```{r cache=TRUE}
+predictTrain <- predict(modFit, mytrain)
+confusionMatrix(predictTrain, mytrain$classe)
+```
+ 
+Next, we use the model to predict the outcome for the testing set.  As shown in the confusion matrix output, the accuracy is 99.4%, which means that the out of sample error of this model alone is (1-accuracy) or 0.6%.
+```{r cache=TRUE}
+#Test the model
+predictTest <- predict(modFit, mytest)
+confusionMatrix(predictTest, mytest$classe)
+```
+
+However, because it took several iterations to reach this model where all of the cleaned data was used with cross validation, we need to average the out-of-sample error rates for all models to get a true estimate of the out-of-sample error rate.  
+
+Below is a table the contains the proportion of the data used in the training set, which is designated as 'p',  and the corresponding estimated out-of-sample error rate.
+
+```{r kable, results = 'asis', echo = FALSE}
+library(knitr)
+p1 <- 0.1; err1 <- 1 - 0.9536
+p2 <- 0.2; err2 <- 1 - 0.9692
+p3 <- 0.4; err3 <- 1 - 0.9866
+p4 <- 0.5; err4 <- 1 - 0.9915
+pfinal <- 0.6; errfinal <- 1 - 0.9944
+
+error.frame <- data.frame(p1, err1)
+error.frame <- rbind(error.frame, c(p2, err2))
+error.frame <- rbind(error.frame, c(p3, err3))
+error.frame <- rbind(error.frame, c(p4, err4))
+error.frame <- rbind(error.frame, c(pfinal, errfinal))
+colnames(error.frame) <- c('p', 'out-of-sample error')
+crossval.error <- mean(error.frame[,2]) 
+kable(error.frame)
+```
+
+Therefore, taking the average of those error rates, the true out-of-sample error rate, that takes cross validation into account, is `r crossval.error * 100`%.
+
+###Conclusion
+It was quickly evident that a Random Forest prediction model for this project was extremely accurate.  Using 60% of the training data with only variables based on raw data from activity monitors resulted in a prediction model with `r crossval.error * 100`% out of sample error based on cross validation.  Even better, when run to predict the final 20 different test cases, it predicted all 20 correctly.
+ 
+###Reference
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
